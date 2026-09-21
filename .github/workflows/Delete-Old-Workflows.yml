@@ -22,12 +22,14 @@ jobs:
         keep_minimum_runs: 15
 
     - name: Delete Old Releases
-      # 【修复1】锁定具体版本号，避免 @master 的 Node.js 弃用警告
-      uses: dev-drprasad/delete-older-releases@v0.2.1 
-      with:
-        keep_latest: 180
-        delete_tags: true
-        # 【修复2】移除这里的 token 参数！该 Action 不支持此输入
       env:
-        # 【修复3】Token 必须通过 env 环境变量传入
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 保留最新 180 个 Release，删除更早的（含 tag）
+        gh release list --limit 1000 --json tagName,createdAt \
+
+          | jq -r '.[180:] | .[] | .tagName' \
+          | while read -r tag; do
+              echo "Deleting release and tag: $tag"
+              gh release delete "$tag" --yes --cleanup-tag || true
+            done
