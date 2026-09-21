@@ -22,37 +22,12 @@ jobs:
         keep_minimum_runs: 15
 
     - name: Delete Old Releases
+      # 【修复1】锁定具体版本号，避免 @master 的 Node.js 弃用警告
+      uses: dev-drprasad/delete-older-releases@v0.2.1 
+      with:
+        keep_latest: 180
+        delete_tags: true
+        # 【修复2】移除这里的 token 参数！该 Action 不支持此输入
       env:
+        # 【修复3】Token 必须通过 env 环境变量传入
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # 不使用 set -u，避免空变量报错；不使用 set -e，手动控制错误
-        set -o pipefail
-        
-        KEEP_LATEST=180
-        echo "📋 Fetching releases..."
-        
-        # 获取待删除的 tag 列表，jq 失败或无数据时 TO_DELETE 为空
-        TO_DELETE=$(gh release list --limit 1000 --json tagName,createdAt 2>/dev/null \
-
-          | jq -r ".[$KEEP_LATEST:] | .[] | .tagName" 2>/dev/null || true)
-        
-        # 判空：如果没有需要删除的，直接成功退出
-        if [ -z "$TO_DELETE" ]; then
-          echo "✅ No releases to delete. (Total <= $KEEP_LATEST)"
-          exit 0
-        fi
-        
-        DELETE_COUNT=$(printf '%s\n' "$TO_DELETE" | wc -l | tr -d ' ')
-        echo "🗑️  Will delete $DELETE_COUNT old release(s)..."
-        
-        # 使用最基础的 for 循环，彻底避开 while read 和进程替换的语法坑
-        for tag in $TO_DELETE; do
-          echo "  → Deleting release: $tag"
-          gh release delete "$tag" --yes 2>&1 || echo "  ⚠️ Release $tag delete failed or already gone"
-          
-          echo "  → Deleting tag: $tag"
-          # 使用 gh api 删除 tag，自动继承 GITHUB_TOKEN 认证，无需 git 配置
-          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag" 2>&1 || echo "  ⚠️ Tag $tag delete failed or already gone"
-        done
-        
-        echo "✅ Cleanup completed successfully."
