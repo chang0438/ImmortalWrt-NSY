@@ -1,46 +1,70 @@
-    - name: Clean Old Workflows & Releases
+    - name: Clean Old Workflows & Releases (Safe Mode)
       uses: actions/github-script@v7
       with:
         script: |
-          const KEEP_WORKFLOW_DAYS = 20;
-          const KEEP_MIN_RUNS = 15;
+          const DRY_RUN = true; // ⚠️ 首次务必设为 true，确认日志无误后再改为 false
+          const KEEP_WORKFLOW_DAYS = 7;
+          const KEEP_MIN_RUNS_PER_WORKFLOW = 30;
           const KEEP_RELEASES = 180;
 
-          // === 1. 清理旧 Workflow Runs ===
           const cutoff = new Date(Date.now() - KEEP_WORKFLOW_DAYS * 86400000);
-          const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            per_page: 100
-          });
 
-          const toDeleteRuns = runs.filter(r => 
-            new Date(r.created_at) < cutoff && 
-            runs.filter(x => x.workflow_id === r.workflow_id).length > KEEP_MIN_RUNS
-          );
-
-          for (const run of toDeleteRuns) {
-            core.info(`Deleting workflow run: ${run.id}`);
-            await github.rest.actions.deleteWorkflowRun({
-              owner: context.repo.owner, repo: context.repo.repo, run_id: run.id
-            }).catch(e => core.warning(`Skip run ${run.id}: ${e.message}`));
-          }
-
-          // === 2. 清理旧 Releases & Tags ===
-          const releases = await github.paginate(github.rest.repos.listReleases, {
+          // === 1. 安全清理 Workflow Runs ===
+          // 先获取每个 workflow 的总运行数（不受分页影响）
+          const workflows = await github.paginate(github.rest.actions.listRepoWorkflows, {
             owner: context.repo.owner, repo: context.repo.repo, per_page: 100
           });
 
-          const toDeleteReleases = releases.slice(KEEP_RELEASES);
-          for (const rel of toDeleteReleases) {
-            core.info(`Deleting release & tag: ${rel.tag_name}`);
-            await github.rest.repos.deleteRelease({
-              owner: context.repo.owner, repo: context.repo.repo, release_id: rel.id
-            }).catch(e => core.warning(`Skip release ${rel.tag_name}: ${e.message}`));
-            
-            await github.rest.git.deleteRef({
-              owner: context.repo.owner, repo: context.repo.repo, ref: `tags/${rel.tag_name}`
-            }).catch(() => {});
+          const workflowRunCounts = {};
+          for (const wf of workflows) {
+            try {
+              const resp = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner, repo: context.repo.repo,
+                workflow_id: wf.id, per_page: 1, status: 'completed'
+              });
+              workflowRunCounts[wf.id] = resp.data.total_count;
+            } catch { workflowRunCounts[wf.id] = 0; }
           }
 
-          core.info(`✅ Done. Deleted ${toDeleteRuns.length} runs, ${toDeleteReleases.length} releases.`);
+          const allRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            owner: context.repo.owner, repo: context.repo.repo,
+            per_page: 100, status: 'completed'
+          });
+
+          let deletedRuns = 0;
+          for (const run of allRuns) {
+            const totalCount = workflowRunCounts[run.workflow_id] || 0;
+            if (new Date(run.created_at) < cutoff && totalCount > KEEP_MIN_RUNS_PER_WORKFLOW) {
+              if (DRY_RUN) {
+                core.info(`[DRY-RUN] Would delete run ${run.id} (${run.name}, created ${run.created_at}, total runs: ${totalCount})`);
+              } else {
+                core.info(`Deleting run ${run.id}`);
+                await github.rest.actions.deleteWorkflowRun({
+                  owner: context.repo.owner, repo: context.repo.repo, run_id: run.id
+                }).catch(e => core.warning(`Skip ${run.id}: ${e.message}`));
+              }
+              deletedRuns++;
+            }
+          }
+
+          // === 2. 清理旧 Releases（逻辑不变，已验证安全）===
+          const releases = await github.paginate(github.rest.repos.listReleases, {
+            owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+          });
+          const toDeleteReleases = releases.slice(KEEP_RELEASES);
+          for (const rel of toDeleteReleases) {
+            if (DRY_RUN) {
+              core.info(`[DRY-RUN] Would delete release: ${rel.tag_name}`);
+            } else {
+              core.info(`Deleting release & tag: ${rel.tag_name}`);
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner, repo: context.repo.repo, release_id: rel.id
+              }).catch(e => core.warning(`Skip ${rel.tag_name}: ${e.message}`));
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner, repo: context.repo.repo, ref: `tags/${rel.tag_name}`
+              }).catch(() => {});
+            }
+          }
+
+          const mode = DRY_RUN ? '[DRY-RUN] ' : '';
+          core.info(`${mode}✅ Done. Processed ${deletedRuns} runs, ${toDeleteReleases.length} releases.`);
