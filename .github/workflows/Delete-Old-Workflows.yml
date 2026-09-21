@@ -3,12 +3,11 @@ name: Delete Old Workflows
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'  # 建议加上引号
+    - cron: '0 3 * * *'
 
-# 【新增】声明 GITHUB_TOKEN 的权限，这是必须的！
 permissions:
-  actions: write       # 删除 workflow runs 需要
-  contents: write      # 删除 releases 和 tags 需要
+  actions: write
+  contents: write
 
 jobs:
   Cleaning:
@@ -18,15 +17,17 @@ jobs:
     - name: Delete Old Workflows
       uses: Mattraks/delete-workflow-runs@main
       with:
-        # 【修改】改用默认的 GITHUB_TOKEN
         token: ${{ secrets.GITHUB_TOKEN }}
         retain_days: 20
         keep_minimum_runs: 15
 
     - name: Delete Old Releases
-      uses: dev-drprasad/delete-older-releases@master
+      # 【修复1】锁定具体版本号，避免 @master 的 Node.js 弃用警告
+      uses: dev-drprasad/delete-older-releases@v0.2.1 
       with:
         keep_latest: 180
         delete_tags: true
-        # 【修改】改用默认的 GITHUB_TOKEN，并移到 with 下（该 action 推荐用法）
-        token: ${{ secrets.GITHUB_TOKEN }}
+        # 【修复2】移除这里的 token 参数！该 Action 不支持此输入
+      env:
+        # 【修复3】Token 必须通过 env 环境变量传入
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
