@@ -1,33 +1,46 @@
-name: Delete Old Workflows
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 3 * * *'
-
-permissions:
-  actions: write
-  contents: write
-
-jobs:
-  Cleaning:
-    runs-on: ubuntu-22.04
-
-    steps:
-    - name: Delete Old Workflows
-      uses: Mattraks/delete-workflow-runs@main
+    - name: Clean Old Workflows & Releases
+      uses: actions/github-script@v7
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        retain_days: 20
-        keep_minimum_runs: 15
+        script: |
+          const KEEP_WORKFLOW_DAYS = 20;
+          const KEEP_MIN_RUNS = 15;
+          const KEEP_RELEASES = 180;
 
-    - name: Delete Old Releases
-      # 【修复1】锁定具体版本号，避免 @master 的 Node.js 弃用警告
-      uses: dev-drprasad/delete-older-releases@v0.2.1 
-      with:
-        keep_latest: 180
-        delete_tags: true
-        # 【修复2】移除这里的 token 参数！该 Action 不支持此输入
-      env:
-        # 【修复3】Token 必须通过 env 环境变量传入
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          // === 1. 清理旧 Workflow Runs ===
+          const cutoff = new Date(Date.now() - KEEP_WORKFLOW_DAYS * 86400000);
+          const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            per_page: 100
+          });
+
+          const toDeleteRuns = runs.filter(r => 
+            new Date(r.created_at) < cutoff && 
+            runs.filter(x => x.workflow_id === r.workflow_id).length > KEEP_MIN_RUNS
+          );
+
+          for (const run of toDeleteRuns) {
+            core.info(`Deleting workflow run: ${run.id}`);
+            await github.rest.actions.deleteWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: run.id
+            }).catch(e => core.warning(`Skip run ${run.id}: ${e.message}`));
+          }
+
+          // === 2. 清理旧 Releases & Tags ===
+          const releases = await github.paginate(github.rest.repos.listReleases, {
+            owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+          });
+
+          const toDeleteReleases = releases.slice(KEEP_RELEASES);
+          for (const rel of toDeleteReleases) {
+            core.info(`Deleting release & tag: ${rel.tag_name}`);
+            await github.rest.repos.deleteRelease({
+              owner: context.repo.owner, repo: context.repo.repo, release_id: rel.id
+            }).catch(e => core.warning(`Skip release ${rel.tag_name}: ${e.message}`));
+            
+            await github.rest.git.deleteRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: `tags/${rel.tag_name}`
+            }).catch(() => {});
+          }
+
+          core.info(`✅ Done. Deleted ${toDeleteRuns.length} runs, ${toDeleteReleases.length} releases.`);
