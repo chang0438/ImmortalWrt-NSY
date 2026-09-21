@@ -25,30 +25,30 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        set -euo pipefail
+        set -eo pipefail  # 【修复1】移除 -u，避免空变量触发 exit 2
         
         KEEP_LATEST=180
-        echo "📋 Fetching releases and filtering..."
+        echo "📋 Fetching releases..."
         
-        # 【优化1】直接在 jq 中完成排序确认与切片，避免 shell 层多次处理大文本
-        # gh 默认按 createdAt 降序排列，jq 直接跳过前 N 个
         TO_DELETE=$(gh release list --limit 1000 --json tagName,createdAt \
 
-          | jq -r ".[$KEEP_LATEST:] | .[] | .tagName")
+          | jq -r ".[$KEEP_LATEST:] | .[] | .tagName" || true)
         
         if [ -z "$TO_DELETE" ]; then
           echo "✅ No releases to delete. (Total <= $KEEP_LATEST)"
           exit 0
         fi
         
-        DELETE_COUNT=$(echo "$TO_DELETE" | wc -l)
+        DELETE_COUNT=$(echo "$TO_DELETE" | wc -l | tr -d ' ')
         echo "🗑️  Will delete $DELETE_COUNT old release(s)..."
         
-        # 【优化2】使用进程替换代替管道，避免子 Shell 变量作用域问题
         while IFS= read -r tag; do
           [ -z "$tag" ] && continue
-          echo "  → Deleting: $tag"
-          gh release delete "$tag" --yes --cleanup-tag 2>&1 || echo "  ⚠️ Failed to delete $tag (may already be removed or protected)"
+          echo "  → Deleting release: $tag"
+          gh release delete "$tag" --yes 2>&1 || echo "  ⚠️ Release $tag may already be deleted"
+          
+          echo "  → Deleting tag: $tag"
+          git push origin --delete "$tag" 2>&1 || echo "  ⚠️ Tag $tag may not exist or already deleted"
         done < <(echo "$TO_DELETE")
         
         echo "✅ Cleanup completed successfully."
