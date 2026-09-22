@@ -192,6 +192,32 @@ jobs:
           echo "Warning: DTS file not found, skipping patch"
         fi
 
+    - name: Disable Rust package (prevent host-compile)
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+        # Remove rust package from feeds to prevent any dependency pulling it in
+        RUST_PKG="feeds/packages/lang/rust"
+        if [ -d "$RUST_PKG" ]; then
+          echo "Disabling rust package at $RUST_PKG"
+          # Rename to disable it completely
+          mv "$RUST_PKG" "${RUST_PKG}.disabled"
+        fi
+        # Also disable any rust-dependent packages that might be in feeds
+        for pkg in feeds/packages/*/rust*; do
+          if [ -d "$pkg" ] && [[ "$pkg" != *.disabled ]]; then
+            echo "Disabling rust-dependent package: $pkg"
+            mv "$pkg" "${pkg}.disabled"
+          fi
+        done
+        # Disable rust in luci feed if present
+        for pkg in feeds/luci/*/rust*; do
+          if [ -d "$pkg" ] && [[ "$pkg" != *.disabled ]]; then
+            echo "Disabling luci rust package: $pkg"
+            mv "$pkg" "${pkg}.disabled"
+          fi
+        done
+
     - name: Generate Variables
       id: variable
       run: |
