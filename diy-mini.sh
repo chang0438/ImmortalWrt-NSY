@@ -66,8 +66,8 @@ rm -rf feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/background/*
 
 
 # iStore
-git_sparse_clone main https://github.com/linkease/istore-ui app-store-ui
-git_sparse_clone main https://github.com/linkease/istore luci
+# git_sparse_clone main https://github.com/linkease/istore-ui app-store-ui
+# git_sparse_clone main https://github.com/linkease/istore luci
 
 
 # 为固件版本加上编译作者
@@ -100,7 +100,7 @@ chmod 755 package/base-files/files/bin/coremark.sh
 
 
 # 定时限速插件
-git clone --depth=1 https://github.com/sirpdboy/luci-app-eqosplus package/luci-app-eqosplus
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-eqosplus package/luci-app-eqosplus
 
 
 # 上游已经把编译器资源包删除了，先禁用吧
