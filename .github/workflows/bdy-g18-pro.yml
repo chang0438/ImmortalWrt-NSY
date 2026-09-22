@@ -10,7 +10,7 @@ env:
   REPO_BRANCH: main
   # 必须替换为已经验证成功的上游 commit。
   # 不建议直接跟随 main，避免上游 feed 或 package 变化导致构建突然失败。
-  OPENWRT_COMMIT: REPLACE_WITH_KNOWN_GOOD_COMMIT
+  OPENWRT_COMMIT: 25d59560bf989fe011a22c3e2fbe0a012976e064
   CONFIG_FILE: configs/g18-pro-docker.config
   DIY_SCRIPT: diy-mini.sh
   CLASH_KERNEL: arm64
