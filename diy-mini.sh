@@ -1,5 +1,10 @@
 #!/bin/bash
 
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+OPENWRT_ROOT="$(pwd)"
+
 # 修改默认IP
 # sed -i 's/192.168.1.1/10.0.0.1/g' package/base-files/files/bin/config_generate
 
@@ -10,46 +15,78 @@
 # sed -i 's|/bin/login|/bin/login -f root|g' feeds/packages/utils/ttyd/files/ttyd.config
 
 
-
 # 拉取仓库文件夹
 merge_package() {
-	# 参数1是分支名,参数2是库地址,参数3是所有文件下载到指定路径。
-	# 同一个仓库下载多个文件夹直接在后面跟文件名或路径，空格分开。
-	# 示例:
-	# merge_package master https://github.com/WYC-2020/openwrt-packages package/openwrt-packages luci-app-eqos luci-app-openclash luci-app-ddnsto ddnsto 
-	# merge_package master https://github.com/lisaac/luci-app-dockerman package/lean applications/luci-app-dockerman
-	if [[ $# -lt 3 ]]; then
-		echo "Syntax error: [$#] [$*]" >&2
-		return 1
-	fi
-	trap 'rm -rf "$tmpdir"' EXIT
-	branch="$1" curl="$2" target_dir="$3" && shift 3
-	rootdir="$PWD"
-	localdir="$target_dir"
-	[ -d "$localdir" ] || mkdir -p "$localdir"
-	tmpdir="$(mktemp -d)" || exit 1
-        echo "开始下载：$(echo $curl | awk -F '/' '{print $(NF)}')"
-	git clone -b "$branch" --depth 1 --filter=blob:none --sparse "$curl" "$tmpdir"
-	cd "$tmpdir"
-	git sparse-checkout init --cone
-	git sparse-checkout set "$@"
-	# 使用循环逐个移动文件夹
-	for folder in "$@"; do
-		mv -f "$folder" "$rootdir/$localdir"
-	done
-	cd "$rootdir"
+  # 参数1是分支名，参数2是仓库地址，参数3是目标目录。
+  # 后续参数为需要 sparse checkout 的文件或目录。
+  if [ "$#" -lt 3 ]; then
+    echo "Syntax error: [$#] [$*]" >&2
+    return 1
+  fi
+
+  local branch="$1"
+  local curl="$2"
+  local target_dir="$3"
+  shift 3
+
+  local rootdir="$OPENWRT_ROOT"
+  local localdir="$target_dir"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+
+  cleanup_merge_package() {
+    rm -rf "$tmpdir"
+  }
+  trap cleanup_merge_package RETURN
+
+  mkdir -p "$rootdir/$localdir"
+  echo "开始下载：$(basename "$curl")"
+
+  git clone \
+    --branch "$branch" \
+    --depth 1 \
+    --filter=blob:none \
+    --sparse \
+    "$curl" \
+    "$tmpdir"
+
+  cd "$tmpdir"
+  git sparse-checkout init --cone
+  git sparse-checkout set "$@"
+
+  for folder in "$@"; do
+    if [ ! -e "$folder" ]; then
+      echo "未找到 sparse checkout 路径: $folder" >&2
+      return 1
+    fi
+    cp -a "$folder" "$rootdir/$localdir/"
+  done
 }
 
 # Git稀疏克隆，只克隆指定目录到本地
-function git_sparse_clone() {
-  branch="$1" repourl="$2" && shift 2
-  git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl
-  repodir=$(echo $repourl | awk -F '/' '{print $(NF)}')
-  cd $repodir && git sparse-checkout set $@
-  mv -f $@ ../package
-  cd .. && rm -rf $repodir
-}
+git_sparse_clone() {
+  local branch="$1"
+  local repourl="$2"
+  shift 2
 
+  local repodir
+  repodir="$(basename "$repourl" .git)"
+
+  git clone \
+    --depth 1 \
+    --branch "$branch" \
+    --single-branch \
+    --filter=blob:none \
+    --sparse \
+    "$repourl" \
+    "$repodir"
+
+  cd "$repodir"
+  git sparse-checkout set "$@"
+  cp -a "$@" ../package/
+  cd ..
+  rm -rf "$repodir"
+}
 
 
 # Themes
@@ -59,27 +96,30 @@ function git_sparse_clone() {
 
 
 # 更改 Argon 主题背景
-rm -rf feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/background/*
+rm -rf -- feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/background/*
 # cp -f $GITHUB_WORKSPACE/images/bg1.jpg feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/img/bg1.jpg
 # mkdir -p package/luci-theme-argon/htdocs/luci-static/argon/img
 # cp -f $GITHUB_WORKSPACE/images/bg1.jpg package/luci-theme-argon/htdocs/luci-static/argon/img/bg1.jpg
 
 
 # iStore
-# git_sparse_clone main https://github.com/linkease/istore-ui app-store-ui
-# git_sparse_clone main https://github.com/linkease/istore luci
+git_sparse_clone main https://github.com/linkease/istore-ui app-store-ui
+git_sparse_clone main https://github.com/linkease/istore luci
 
 
 # 为固件版本加上编译作者
 author="xiaomeng9597"
-sed -i "s/DISTRIB_DESCRIPTION.*/DISTRIB_DESCRIPTION='%D %V %C by ${author}'/g" package/base-files/files/etc/openwrt_release
-sed -i "s/OPENWRT_RELEASE.*/OPENWRT_RELEASE=\"%D %V %C by ${author}\"/g" package/base-files/files/usr/lib/os-release
-cp -f $GITHUB_WORKSPACE/configfiles/99-default-settings-chinese package/emortal/default-settings/files/99-default-settings-chinese
+sed -i "s/DISTRIB_DESCRIPTION.*/DISTRIB_DESCRIPTION='%D %V %C by ${author}'/g" \
+  package/base-files/files/etc/openwrt_release
+sed -i "s/OPENWRT_RELEASE.*/OPENWRT_RELEASE=\"%D %V %C by ${author}\"/g" \
+  package/base-files/files/usr/lib/os-release
+cp -f "$GITHUB_WORKSPACE/configfiles/99-default-settings-chinese" \
+  package/emortal/default-settings/files/99-default-settings-chinese
 
 
 # 修改 Makefile
-# find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/..\/..\/luci.mk/\$(TOPDIR)\/feeds\/luci\/luci.mk/g' {}
-# find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/..\/..\/lang\/golang\/golang-package.mk/\$(TOPDIR)\/feeds\/packages\/lang\/golang\/golang-package.mk/g' {}
+# find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/..\/..\/luci.mk/$(TOPDIR)\/feeds\/luci\/luci.mk/g' {}
+# find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/..\/..\/lang\/golang\/golang-package.mk/$(TOPDIR)\/feeds\/packages\/lang\/golang\/golang-package.mk/g' {}
 # find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/PKG_SOURCE_URL:=@GHREPO/PKG_SOURCE_URL:=https:\/\/github.com/g' {}
 # find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/PKG_SOURCE_URL:=@GHCODELOAD/PKG_SOURCE_URL:=https:\/\/codeload.github.com/g' {}
 
@@ -89,12 +129,17 @@ cp -f $GITHUB_WORKSPACE/configfiles/99-default-settings-chinese package/emortal/
 
 
 # 最大连接数修改为65535
-sed -i '/customized in this file/a net.netfilter.nf_conntrack_max=65535' package/base-files/files/etc/sysctl.conf
+grep -qF 'net.netfilter.nf_conntrack_max=65535' \
+  package/base-files/files/etc/sysctl.conf || \
+  sed -i '/customized in this file/a net.netfilter.nf_conntrack_max=65535' \
+    package/base-files/files/etc/sysctl.conf
 
 
 # 集成CPU性能跑分脚本
-cp -f $GITHUB_WORKSPACE/configfiles/coremark/coremark-arm64 package/base-files/files/bin/coremark-arm64
-cp -f $GITHUB_WORKSPACE/configfiles/coremark/coremark-arm64.sh package/base-files/files/bin/coremark.sh
+cp -f "$GITHUB_WORKSPACE/configfiles/coremark/coremark-arm64" \
+  package/base-files/files/bin/coremark-arm64
+cp -f "$GITHUB_WORKSPACE/configfiles/coremark/coremark-arm64.sh" \
+  package/base-files/files/bin/coremark.sh
 chmod 755 package/base-files/files/bin/coremark-arm64
 chmod 755 package/base-files/files/bin/coremark.sh
 
@@ -106,6 +151,5 @@ chmod 755 package/base-files/files/bin/coremark.sh
 # 上游已经把编译器资源包删除了，先禁用吧
 # sed -i 's/ci-llvm=true/ci-llvm=false/g' feeds/packages/lang/rust/Makefile
 
-
-./scripts/feeds update -a
-./scripts/feeds install -a
+# feeds 的 update/install 统一由 GitHub Actions workflow 执行。
+# 不要在这里重复执行，否则可能覆盖或破坏已经准备好的 feed 状态。
