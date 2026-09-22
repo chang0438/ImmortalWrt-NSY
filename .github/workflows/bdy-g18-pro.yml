@@ -8,6 +8,9 @@ on:
 env:
   REPO_URL: https://github.com/zhoufuli/immortalwrt-rk356x
   REPO_BRANCH: main
+  # 必须替换为已经验证成功的上游 commit。
+  # 不建议直接跟随 main，避免上游 feed 或 package 变化导致构建突然失败。
+  OPENWRT_COMMIT: REPLACE_WITH_KNOWN_GOOD_COMMIT
   CONFIG_FILE: configs/g18-pro-docker.config
   DIY_SCRIPT: diy-mini.sh
   CLASH_KERNEL: arm64
@@ -87,11 +90,32 @@ jobs:
       working-directory: ${{ env.WORKDIR_PATH }}/workdir
       id: clone
       run: |
-        #df -hT $GITHUB_WORKSPACE
+        set -Eeuo pipefail
+
         df -hT
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone \
+          --no-tags \
+          --single-branch \
+          --branch "$REPO_BRANCH" \
+          "$REPO_URL" \
+          openwrt
+
         cd openwrt
+
+        if [ "$OPENWRT_COMMIT" = "REPLACE_WITH_KNOWN_GOOD_COMMIT" ] || \
+           [ -z "$OPENWRT_COMMIT" ]; then
+          echo "::error::OPENWRT_COMMIT 未配置。请填写已验证成功的上游 commit。"
+          exit 1
+        fi
+
+        # 获取并固定到指定 commit，避免直接使用 main 最新状态。
+        git fetch --no-tags origin "$OPENWRT_COMMIT"
+        git checkout --detach "$OPENWRT_COMMIT"
+        git submodule update --init --recursive
+
+        echo "Using OpenWrt commit: $(git rev-parse HEAD)"
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
@@ -107,24 +131,64 @@ jobs:
 
     - name: Install Feeds
       run: |
+        set -Eeuo pipefail
+
         df -hT
-        cd $OPENWRT_PATH
-        ./scripts/feeds update -a
+        cd "$OPENWRT_PATH"
+
+        feed_failed() {
+          status=$?
+          echo "::error::OpenWrt feeds 操作失败，退出码: $status"
+          echo "========== feeds.conf.default =========="
+          [ -f feeds.conf.default ] && cat feeds.conf.default || true
+          echo "========== feeds.conf =========="
+          [ -f feeds.conf ] && cat feeds.conf || true
+          echo "========== feed directories =========="
+          find feeds -maxdepth 2 -type d -print 2>/dev/null | sort || true
+          exit "$status"
+        }
+        trap feed_failed ERR
+
+        # 清理可能来自源码或 runner 缓存的旧 feed 状态。
+        ./scripts/feeds clean || true
+        rm -rf feeds
+
+        # 网络波动时允许重新拉取一次；真正错误不会被忽略。
+        for attempt in 1 2 3; do
+          echo "Updating feeds, attempt ${attempt}/3"
+          if ./scripts/feeds update -a; then
+            break
+          fi
+
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::feeds update 连续失败 3 次"
+            exit 1
+          fi
+
+          rm -rf feeds
+          sleep 10
+        done
+
         ./scripts/feeds install -a
+        ./scripts/feeds list
+        trap - ERR
 
     - name: Generate Variables
       id: variable
       run: |
+        set -Eeuo pipefail
+
         df -hT
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
+        cp "$GITHUB_WORKSPACE/$CONFIG_FILE" "$OPENWRT_PATH/.config"
+        cd "$OPENWRT_PATH"
         make defconfig > /dev/null 2>&1
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+
+        SOURCE_REPO="$(basename "$REPO_URL")"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        DEVICE_TARGET=$(awk -F '"' '/^CONFIG_TARGET_BOARD=/{print $2}' .config)
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        DEVICE_SUBTARGET=$(awk -F '"' '/^CONFIG_TARGET_SUBTARGET=/{print $2}' .config)
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
 
@@ -138,28 +202,35 @@ jobs:
 
     - name: Load Custom Configuration
       run: |
+        set -Eeuo pipefail
+
         df -hT
-        [ -e files ] && mv files $OPENWRT_PATH/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE $OPENWRT_PATH/.config
-        chmod +x $GITHUB_WORKSPACE/scripts/*.sh
-        chmod +x $DIY_SCRIPT
-        cd $OPENWRT_PATH
-        $GITHUB_WORKSPACE/$DIY_SCRIPT
-        $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
+        [ -e "$GITHUB_WORKSPACE/files" ] && \
+          cp -a "$GITHUB_WORKSPACE/files" "$OPENWRT_PATH/files"
+
+        chmod +x "$GITHUB_WORKSPACE"/scripts/*.sh
+        chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+
+        cd "$OPENWRT_PATH"
+        "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        "$GITHUB_WORKSPACE/scripts/preset-clash-core.sh" "$CLASH_KERNEL"
         # $GITHUB_WORKSPACE/scripts/preset-adguard-core.sh $CLASH_KERNEL
 
     - name: Download DL Package
       run: |
+        set -Eeuo pipefail
+
         df -hT
-        cd $OPENWRT_PATH
+        cd "$OPENWRT_PATH"
         make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile Firmware
       id: compile
       run: |
+        set -Eeuo pipefail
+
         df -hT
         cd "$OPENWRT_PATH"
 
@@ -181,7 +252,10 @@ jobs:
         make download -j1 V=s
 
         echo "$(nproc) thread compile"
-        make -j"$(nproc)" || make -j1 V=s
+        if ! make -j"$(nproc)"; then
+          echo "::warning::并行编译失败，开始单线程详细重试"
+          make -j1 V=s
+        fi
 
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
