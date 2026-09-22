@@ -179,18 +179,42 @@ jobs:
         set -Eeuo pipefail
 
         df -hT
+
         cp "$GITHUB_WORKSPACE/$CONFIG_FILE" "$OPENWRT_PATH/.config"
         cd "$OPENWRT_PATH"
-        make defconfig > /dev/null 2>&1
+
+        echo "========== OpenWrt commit =========="
+        git rev-parse HEAD
+
+        echo "========== Initial configuration =========="
+        grep -E '^(CONFIG_TARGET|CONFIG_PACKAGE|CONFIG_DEFAULT)' .config || true
+
+        echo "========== Running defconfig =========="
+        make defconfig V=s
+
+        echo "========== Final configuration =========="
+        grep -E '^(CONFIG_TARGET|CONFIG_PACKAGE|CONFIG_DEFAULT)' .config || true
 
         SOURCE_REPO="$(basename "$REPO_URL")"
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
+
         DEVICE_TARGET=$(awk -F '"' '/^CONFIG_TARGET_BOARD=/{print $2}' .config)
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
         DEVICE_SUBTARGET=$(awk -F '"' '/^CONFIG_TARGET_SUBTARGET=/{print $2}' .config)
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+
+        test -n "$DEVICE_TARGET" || {
+          echo "::error::CONFIG_TARGET_BOARD is missing after defconfig"
+          exit 1
+        }
+
+        test -n "$DEVICE_SUBTARGET" || {
+          echo "::error::CONFIG_TARGET_SUBTARGET is missing after defconfig"
+          exit 1
+        }
+
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_ENV"
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_OUTPUT"
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_ENV"
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_OUTPUT"
 
     - name: Cache Toolchain
       if: env.CACHE_TOOLCHAIN == 'true'
