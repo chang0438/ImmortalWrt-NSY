@@ -173,6 +173,25 @@ jobs:
         ./scripts/feeds list
         trap - ERR
 
+    - name: Patch U-Boot DTS (fix xpcs/rng labels)
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+        # Find and fix the U-Boot DTS for bdy-g18-pro
+        DTS_FILE=$(find package/boot/uboot-rockchip -name "rk3568-bdy-g18-pro.dts" 2>/dev/null | head -1)
+        if [ -f "$DTS_FILE" ]; then
+          echo "Patching $DTS_FILE"
+          # Comment out references to non-existent labels xpcs and rng
+          sed -i 's/&xpcs;/\/\/ &xpcs;/g' "$DTS_FILE"
+          sed -i 's/&rng;/\/\/ &rng;/g' "$DTS_FILE"
+          # Also handle property assignments
+          sed -i 's/xpcs = <&xpcs[^>]*>;/\/\/ xpcs = <&xpcs_phy>;/g' "$DTS_FILE"
+          sed -i 's/rng = <&rng[^>]*>;/\/\/ rng = <&rng_phy>;/g' "$DTS_FILE"
+          echo "Patched DTS file"
+        else
+          echo "Warning: DTS file not found, skipping patch"
+        fi
+
     - name: Generate Variables
       id: variable
       run: |
