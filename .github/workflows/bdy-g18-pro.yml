@@ -54,14 +54,14 @@ jobs:
       run: |
         echo "警告⚠"
         echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
-        echo -e "已知CPU型号(降序): 7763，8370C，8272CL，8171M，E5-2673\n"
+        echo -e "已知CPU型号(降序): 7763，8370C，8272CL，8171M，E5-2673\\n"
         echo "--------------------------CPU信息--------------------------"
-        echo "CPU物理数量: $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+        echo "CPU物理数量: $(cat /proc/cpuinfo | grep \"physical id\" | sort | uniq | wc -l)"
         echo "CPU核心数量: $(nproc)"
-        echo -e "CPU型号信息:$(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
+        echo -e "CPU型号信息:$(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\\n"
         echo "--------------------------内存信息--------------------------"
         echo "已安装内存详细信息:"
-        echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
+        echo -e "$(sudo lshw -short -C memory | grep GiB)\\n"
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
 
@@ -173,25 +173,6 @@ jobs:
         ./scripts/feeds list
         trap - ERR
 
-    - name: Patch U-Boot DTS (fix xpcs/rng labels)
-      run: |
-        set -Eeuo pipefail
-        cd "$OPENWRT_PATH"
-        # Find and fix the U-Boot DTS for bdy-g18-pro
-        DTS_FILE=$(find package/boot/uboot-rockchip -name "rk3568-bdy-g18-pro.dts" 2>/dev/null | head -1)
-        if [ -f "$DTS_FILE" ]; then
-          echo "Patching $DTS_FILE"
-          # Comment out references to non-existent labels xpcs and rng
-          sed -i 's/&xpcs;/\/\/ &xpcs;/g' "$DTS_FILE"
-          sed -i 's/&rng;/\/\/ &rng;/g' "$DTS_FILE"
-          # Also handle property assignments
-          sed -i 's/xpcs = <&xpcs[^>]*>;/\/\/ xpcs = <&xpcs_phy>;/g' "$DTS_FILE"
-          sed -i 's/rng = <&rng[^>]*>;/\/\/ rng = <&rng_phy>;/g' "$DTS_FILE"
-          echo "Patched DTS file"
-        else
-          echo "Warning: DTS file not found, skipping patch"
-        fi
-
     - name: Disable Rust package (prevent host-compile)
       run: |
         set -Eeuo pipefail
@@ -285,6 +266,36 @@ jobs:
         "$GITHUB_WORKSPACE/scripts/preset-clash-core.sh" "$CLASH_KERNEL"
         # $GITHUB_WORKSPACE/scripts/preset-adguard-core.sh $CLASH_KERNEL
 
+    - name: Patch U-Boot DTS (fix xpcs/rng labels)
+      run: |
+        set -Eeuo pipefail
+        cd "$OPENWRT_PATH"
+        # Find and fix the U-Boot DTS for bdy-g18-pro
+        # The package directory is created during package installation, so search there too
+        DTS_FILE=$(find package/boot/uboot-rockchip -name "rk3568-bdy-g18-pro.dts" 2>/dev/null | head -1)
+        if [ -z "$DTS_FILE" ] || [ ! -f "$DTS_FILE" ]; then
+          # Fallback: check build_dir where package is prepared
+          DTS_FILE=$(find build_dir -name "rk3568-bdy-g18-pro.dts" 2>/dev/null | head -1)
+        fi
+        if [ -f "$DTS_FILE" ]; then
+          echo "Patching $DTS_FILE"
+          # Comment out references to non-existent labels xpcs and rng
+          # Match &xpcs; &xpcs} &xpcs, etc.
+          sed -i 's/&xpcs[};,]/\\/\\/ &xpcs/g' "$DTS_FILE"
+          sed -i 's/&rng[};,]/\\/\\/ &rng/g' "$DTS_FILE"
+          # Also handle property assignments like xpcs = <&xpcs>;
+          sed -i 's/xpcs = <&xpcs[^>]*>;/\\/\\/ xpcs = <&xpcs_phy>;/g' "$DTS_FILE"
+          sed -i 's/rng = <&rng[^>]*>;/\\/\\/ rng = <&rng_phy>;/g' "$DTS_FILE"
+          # Handle any remaining bare references
+          sed -i 's/\b&xpcs\b/\\/\\/ &xpcs/g' "$DTS_FILE"
+          sed -i 's/\b&rng\b/\\/\\/ &rng/g' "$DTS_FILE"
+          echo "Patched DTS file:"
+          grep -n "xpcs\\|rng" "$DTS_FILE" | head -20
+        else
+          echo "Warning: DTS file not found in package/boot/uboot-rockchip or build_dir"
+          find . -name "rk3568-bdy-g18-pro.dts" 2>/dev/null | head -5
+        fi
+
     - name: Download DL Package
       run: |
         set -Eeuo pipefail
@@ -327,9 +338,9 @@ jobs:
         fi
 
         echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "TAG_DATE=$(date +"%Y.%m.%d-%H.%M")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "DATE=$(date +\"%Y-%m-%d %H:%M:%S\")" >> $GITHUB_ENV
+        echo "TAG_DATE=$(date +\"%Y.%m.%d-%H.%M\")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +\"%Y.%m.%d\")" >> $GITHUB_ENV
 
     - name: Check Space Usage
       if: (!cancelled())
